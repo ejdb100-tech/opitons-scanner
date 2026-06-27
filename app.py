@@ -8,6 +8,7 @@
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
+import requests
 import streamlit as st
 import yfinance as yf
 from datetime import datetime, timezone
@@ -155,6 +156,79 @@ def scan_one(ticker: str):
     return out
 
 
+# ============================================================ 넷 유동성 (FRED)
+FRED_IDS = ["WALCL", "WTREGEN", "RRPONTSYD", "SOFR", "IORB",
+            "DGS10", "DGS2", "DTWEXBGS", "VIXCLS"]
+
+
+@st.cache_data(ttl=6 * 3600, show_spinner=False)
+def fred_series(series_id, api_key, start="2014-01-01"):
+    url = "https://api.stlouisfed.org/fred/series/observations"
+    params = {"series_id": series_id, "api_key": api_key,
+              "file_type": "json", "observation_start": start}
+    r = requests.get(url, params=params, timeout=25)
+    r.raise_for_status()
+    obs = r.json().get("observations", [])
+    data = {o["date"]: (float(o["value"]) if o["value"] not in (".", "") else np.nan)
+            for o in obs}
+    s = pd.Series(data)
+    s.index = pd.to_datetime(s.index)
+    return s.dropna()
+
+
+@st.cache_data(ttl=6 * 3600, show_spinner=False)
+def load_liquidity(api_key):
+    raw = {sid: fred_series(sid, api_key) for sid in FRED_IDS}
+    start = min((s.index.min() for s in raw.values() if len(s)), default=pd.Timestamp("2014-01-01"))
+    idx = pd.date_range(start, pd.Timestamp.today().normalize(), freq="D")
+    d = {sid: raw[sid].reindex(idx).ffill() for sid in raw}
+    # 단위 정렬: WALCL·WTREGEN=백만$, RRPONTSYD=십억$ → 백만$로
+    d["NETLIQ"] = d["WALCL"] - d["WTREGEN"] - d["RRPONTSYD"] * 1000.0
+    return d
+
+
+def zscore_last(series, window=756):
+    s = series.dropna()
+    if len(s) < 30:
+        return np.nan
+    w = s.tail(window)
+    sd = w.std()
+    return float((s.iloc[-1] - w.mean()) / sd) if sd and sd == sd else np.nan
+
+
+def liquidity_table(d):
+    chg = lambda s, n=91: s - s.shift(n)  # 약 13주 변화
+    # (이름, 최신값, 단위, z, 가중치, 부호[+ = 값↑이 유동성↑])
+    spec = [
+        ("넷유동성 (레벨)", d["NETLIQ"].iloc[-1] / 1e6, "T$", zscore_last(d["NETLIQ"]), 1.0, +1),
+        ("넷유동성 (13주 변화)", chg(d["NETLIQ"]).iloc[-1] / 1e6, "T$", zscore_last(chg(d["NETLIQ"])), 2.0, +1),
+        ("SOFR−IORB 스프레드", (d["SOFR"] - d["IORB"]).iloc[-1], "%p", zscore_last(d["SOFR"] - d["IORB"]), 1.5, -1),
+        ("VIX", d["VIXCLS"].iloc[-1], "", zscore_last(d["VIXCLS"]), 1.0, -1),
+        ("브로드 달러 (13주 변화)", chg(d["DTWEXBGS"]).iloc[-1], "idx", zscore_last(chg(d["DTWEXBGS"])), 1.0, -1),
+    ]
+    rows = []
+    for name, val, unit, z, w, sign in spec:
+        sz = (z * sign) if z == z else np.nan
+        rows.append({"지표": name, "_val": val, "단위": unit, "z": z,
+                     "유동성기여(z)": sz, "가중치": w})
+    df = pd.DataFrame(rows)
+    v = df.dropna(subset=["유동성기여(z)"])
+    comp = float((v["유동성기여(z)"] * v["가중치"]).sum() / v["가중치"].sum()) if len(v) else np.nan
+    return df, comp
+
+
+def classify_liquidity(comp, t_rich=0.5, t_norm=-0.5, t_low=-1.25):
+    if comp != comp:
+        return ("판정 불가", "#666666", "⚪")
+    if comp >= t_rich:
+        return ("풍부함", "#2e7d32", "🟢")
+    if comp >= t_norm:
+        return ("보통", "#f9a825", "🟡")
+    if comp >= t_low:
+        return ("적음", "#ef6c00", "🟠")
+    return ("위험", "#c62828", "🔴")
+
+
 # ============================================================ 차트
 def oi_bar(view, spot, mp, cw, pw, title):
     fig = go.Figure()
@@ -297,6 +371,71 @@ with tab_detail:
                                       margin=dict(t=20))
                     st.plotly_chart(fig, use_container_width=True)
                     st.caption("양(+)=안정화, 음(−)=변동성 증폭 구간. 딜러 가정에 따라 부호가 바뀜.")
+
+# ---------------------------------------------------------- 넷 유동성
+st.divider()
+st.header("💧 넷 유동성 (Net Liquidity = Fed 총자산 − TGA − RRP)")
+
+try:
+    fred_key = st.secrets["FRED_API_KEY"]
+except Exception:
+    fred_key = ""
+
+if not fred_key:
+    st.warning(
+        "FRED API 키가 필요합니다 (무료, 1분).\n\n"
+        "1. https://fredaccount.stlouisfed.org/apikeys 에서 키 발급\n"
+        "2. **Streamlit Cloud**: 앱 → Settings → Secrets 에 아래 한 줄 추가\n"
+        "   ```\n   FRED_API_KEY = \"발급받은키\"\n   ```\n"
+        "3. **로컬 실행**: 프로젝트에 `.streamlit/secrets.toml` 파일을 만들고 같은 줄 입력"
+    )
+else:
+    try:
+        with st.spinner("FRED 유동성 데이터 로딩..."):
+            d = load_liquidity(fred_key)
+        df_liq, comp = liquidity_table(d)
+
+        with st.expander("판정 기준 조정 (z 컷오프)"):
+            t_rich = st.slider("풍부함 ≥", 0.0, 1.5, 0.5, 0.05)
+            t_norm = st.slider("보통 ≥", -1.0, 0.5, -0.5, 0.05)
+            t_low = st.slider("적음 ≥ (미만은 위험)", -2.0, 0.0, -1.25, 0.05)
+
+        label, color, emoji = classify_liquidity(comp, t_rich, t_norm, t_low)
+        st.markdown(
+            f"<div style='padding:16px 20px;border-radius:12px;background:{color};color:#fff;"
+            f"display:flex;align-items:baseline;gap:16px;'>"
+            f"<span style='font-size:30px;font-weight:800'>{emoji} {label}</span>"
+            f"<span style='font-size:17px;opacity:.95'>종합점수 {comp:+.2f}</span></div>",
+            unsafe_allow_html=True,
+        )
+        st.caption("종합점수 = 각 지표를 추세 대비 z-score로 정규화하고 유동성 방향으로 부호 정렬한 뒤 가중 평균한 값.")
+
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("넷유동성", f"${d['NETLIQ'].iloc[-1] / 1e6:,.2f}T",
+                  f"{(d['NETLIQ'].iloc[-1] - d['NETLIQ'].shift(91).iloc[-1]) / 1e6:+,.2f}T (13주)")
+        m2.metric("Fed 총자산", f"${d['WALCL'].iloc[-1] / 1e6:,.2f}T")
+        m3.metric("TGA", f"${d['WTREGEN'].iloc[-1] / 1e6:,.2f}T")
+        m4.metric("RRP", f"${d['RRPONTSYD'].iloc[-1] / 1e3:,.2f}T")
+
+        show = df_liq.copy()
+        show["최신값"] = show.apply(lambda r: f"{r['_val']:,.2f} {r['단위']}", axis=1)
+        show["z"] = show["z"].map(lambda v: f"{v:+.2f}" if v == v else "—")
+        show["유동성기여(z)"] = show["유동성기여(z)"].map(lambda v: f"{v:+.2f}" if v == v else "—")
+        st.dataframe(show[["지표", "최신값", "z", "유동성기여(z)", "가중치"]],
+                     hide_index=True, use_container_width=True)
+
+        nl = (d["NETLIQ"] / 1e6).tail(520)
+        fig = go.Figure(go.Scatter(x=nl.index, y=nl.values, line=dict(color="#2e86de")))
+        fig.update_layout(height=300, yaxis_title="넷유동성 ($T)",
+                          margin=dict(t=20, b=10), title="넷유동성 추세 (최근 ~1.4년)")
+        st.plotly_chart(fig, use_container_width=True)
+
+        st.caption(
+            "※ 넷유동성 구성요소(WALCL·TGA)는 **주간(H.4.1, 목요일 갱신)** 데이터라 일중 변화는 보조지표(RRP·SOFR·VIX·달러) 위주로 움직입니다. "
+            "가중치·z 윈도우·컷오프는 모두 임의 설정값이며, 백테스트로 검증된 매매 신호가 아니라 **상태 요약용 대시보드**입니다."
+        )
+    except Exception as e:
+        st.error(f"FRED 데이터 로드 실패: {e}")
 
 with st.expander("계산 방식 / 데이터 한계"):
     st.markdown(
