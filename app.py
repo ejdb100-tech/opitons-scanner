@@ -290,6 +290,21 @@ def detail_panel(col, ticker, spot, expiry):
 st.title("미국 개별주 옵션 스캐너 — Max Pain · Call Wall · Put Wall")
 st.caption("데이터: Yahoo Finance(약 15분 지연, OI는 보통 전일 종가 기준). 보조 지표일 뿐 매매 신호가 아닙니다.")
 
+with st.expander("ⓘ 옵션 용어 설명 (맥스페인 · 콜월 · 풋월 · OI)"):
+    st.markdown(
+        """
+이 표의 숫자들은 **옵션 시장에 쌓인 물량**으로 주가의 끌림·지지·저항을 가늠하는 보조 지표입니다.
+
+- **OI (미결제약정, Open Interest)** — 아직 청산되지 않고 살아있는 옵션 계약 수. 특정 행사가에 OI가 많다 = 그 가격대에 시장의 베팅이 몰려 있다는 뜻.
+- **맥스페인 (Max Pain)** — 만기일에 **옵션 매수자 전체가 가장 손해 보는(=매도자가 가장 이득인) 가격**. 만기가 다가올수록 주가가 이 가격으로 끌려가는 경향이 있다고 흔히 봅니다. 일종의 '자석' 가격.
+- **콜월 (Call Wall)** — 콜옵션 OI가 가장 많이 쌓인 행사가. 그 위로 올라가기 어려운 **저항선**으로 자주 해석됩니다.
+- **풋월 (Put Wall)** — 풋옵션 OI가 가장 많이 쌓인 행사가. 그 아래로 잘 안 내려가는 **지지선**으로 자주 해석됩니다.
+- **월물 / 주물** — 옵션 만기 종류. **월물**은 매월 셋째 주 금요일 만기로 물량(OI)이 집중돼 벽이 뚜렷하고, **주물**은 매주 만기로 단기 흐름을 봅니다.
+
+읽는 법 예시: 현재가가 풋월 바로 위에 있으면 "아래에 지지가 두텁다", 콜월 바로 아래면 "위가 막혀 있다"는 식으로 참고합니다. 단, OI는 보통 전일 기준이라 절대적 신호가 아니라 **참고용 지형도**로 보세요.
+        """
+    )
+
 raw = st.text_area("티커 (쉼표 또는 줄바꿈으로 여러 개)",
                    value="MU, NVDA, AAPL, TSLA", height=80)
 tickers = [t.strip().upper() for t in raw.replace("\n", ",").split(",") if t.strip()]
@@ -430,12 +445,37 @@ else:
         )
         st.caption("종합점수 = 각 지표를 추세 대비 z-score로 정규화하고 유동성 방향으로 부호 정렬한 뒤 가중 평균한 값.")
 
+        with st.expander("ⓘ 넷 유동성 용어 설명 (이게 뭐고 왜 보나요?)"):
+            st.markdown(
+                """
+**넷 유동성(Net Liquidity)** 은 시중에 실제로 풀려 도는 달러의 양을 가늠하는 매크로 지표입니다. 유동성이 풍부하면 위험자산(주식 등)에 우호적, 마르면 부담되는 경향이 있어 '판의 분위기'를 봅니다.
+
+**계산: Fed 총자산 − TGA − RRP**
+- **Fed 총자산 (WALCL)** — 연준이 푼 돈의 총량. 클수록 유동성 ↑.
+- **TGA (재무부 일반계정)** — 미국 정부의 '은행 잔고'. 여기에 돈이 쌓이면 시중에서 흡수된 것 → 유동성 ↓.
+- **RRP (역레포)** — 단기자금이 연준에 주차된 금액. 많을수록 시중에서 묶인 것 → 유동성 ↓.
+
+**보조 지표**
+- **SOFR−IORB 스프레드** — 은행 간 초단기 자금 조달 비용. 벌어지면 자금이 빡빡하다는 신호 → 유동성 ↓.
+- **VIX** — 공포지수. 높으면 시장 스트레스 → 유동성 ↓.
+- **브로드 달러 (13주 변화)** — 달러가 강해지면 글로벌 유동성 긴축 → 유동성 ↓.
+
+**z-score / 종합점수 읽는 법** — 각 지표를 "과거 평균 대비 지금 몇 표준편차 떨어져 있나(z)"로 환산하고, 유동성에 좋은 방향이면 +, 나쁜 방향이면 −로 부호를 맞춰 가중평균합니다. 그 합이 **🟢 풍부함 / 🟡 보통 / 🟠 적음 / 🔴 위험** 으로 분류됩니다. (컷오프는 위 슬라이더에서 조정 가능)
+
+⚠️ 백테스트로 검증된 매매 신호가 아니라 현재 상태 요약용입니다.
+                """
+            )
+
         m1, m2, m3, m4 = st.columns(4)
         m1.metric("넷유동성", f"${d['NETLIQ'].iloc[-1] / 1e6:,.2f}T",
-                  f"{(d['NETLIQ'].iloc[-1] - d['NETLIQ'].shift(91).iloc[-1]) / 1e6:+,.2f}T (13주)")
-        m2.metric("Fed 총자산", f"${d['WALCL'].iloc[-1] / 1e6:,.2f}T")
-        m3.metric("TGA", f"${d['WTREGEN'].iloc[-1] / 1e6:,.2f}T")
-        m4.metric("RRP", f"${d['RRPONTSYD'].iloc[-1] / 1e3:,.2f}T")
+                  f"{(d['NETLIQ'].iloc[-1] - d['NETLIQ'].shift(91).iloc[-1]) / 1e6:+,.2f}T (13주)",
+                  help="Fed 총자산 − TGA − RRP. 시중에 실제로 도는 달러 추정치. 클수록 위험자산에 우호적.")
+        m2.metric("Fed 총자산", f"${d['WALCL'].iloc[-1] / 1e6:,.2f}T",
+                  help="연준이 푼 돈의 총량(대차대조표). 클수록 유동성 공급 ↑.")
+        m3.metric("TGA", f"${d['WTREGEN'].iloc[-1] / 1e6:,.2f}T",
+                  help="재무부의 정부 잔고. 쌓이면 시중 달러를 흡수 → 유동성 ↓.")
+        m4.metric("RRP", f"${d['RRPONTSYD'].iloc[-1] / 1e3:,.2f}T",
+                  help="단기자금이 연준에 주차된 금액. 많을수록 시중에 안 도는 돈 → 유동성 ↓.")
 
         show = df_liq.copy()
         show["최신값"] = show.apply(lambda r: f"{r['_val']:,.2f} {r['단위']}", axis=1)
@@ -461,13 +501,32 @@ else:
 st.divider()
 st.header("🎯 진입 타이밍 — 지금 들어가도 되나? (EMA 기반)")
 
+with st.expander("ⓘ 이 도구 사용법 (EMA · 신호등 · 분할 사다리)"):
+    st.markdown(
+        """
+**무엇을 하나요?** 티커를 넣으면 "지금 이 종목에 신규 진입해도 괜찮은 자리인가"를 신호등으로 알려주고, 어느 가격대에서 얼마씩 나눠 사면 좋을지 사다리를 제시합니다.
+
+**EMA (지수이동평균)** — 최근 가격을 평균낸 '추세선'입니다. 최근 값에 더 큰 가중치를 줘서 단순 평균보다 빠르게 반응합니다. 숫자가 작을수록(EMA4) 빠르고 민감, 클수록(EMA50) 느리고 큰 추세를 봅니다.
+- **스윙(EMA 4·6·10)** — 며칠~몇 주짜리 단기 매매용. 반응 빠른 대신 신호가 자주 바뀝니다.
+- **장기(EMA 10·20·50)** — 몇 주~몇 달짜리 포지션용. 더 안정적입니다.
+
+**신호등 판정** — 가격이 추세 EMA(가장 느린 것) 위에 있고 과열만 아니면 진입에 우호적이라는 원칙입니다.
+- 🟢 **진입 양호** — 상승추세 + 과열 아님. 들어가기 좋은 자리.
+- 🟡 **분할 매수 구간** — 추세 위지만 중간 EMA 아래로 눌린 상태. 나눠 사기 좋음.
+- 🟠 **과열 — 대기** — 추세선에서 너무 위로 벌어짐(+2 ATR 초과). 눌림을 기다리세요.
+- 🔴 **진입 부적합** — 추세선 아래(하락추세). 신규 진입은 피하는 게 안전.
+
+**분할 진입 사다리** — 한 번에 다 사지 말고 여러 가격대에 나눠 담는 계획표입니다. 현재가 아래의 EMA들을 '눌림 매수 목표'로 잡고, **더 깊이 내려갈수록 더 많은 비중**을 배정합니다. 예: 지금 20%, EMA 도달 시 30%, 더 아래 EMA에서 50%. 평균 단가를 낮추면서 분할로 모으는 방식입니다.
+        """
+    )
+
 ec1, ec2, ec3 = st.columns([1.6, 1, 1])
 et_ticker = ec1.text_input("티커 (미국: MU / 한국: 005930.KS, 000660.KS)",
                            value="MU", key="et_tkr").strip().upper()
 et_cur = ec2.selectbox("통화", ["USD", "KRW"], key="et_cur")
-horizon = ec3.selectbox("기간", ["스윙 (EMA 20·50·100)", "장기 (EMA 50·100·200)"], key="et_hz")
+horizon = ec3.selectbox("기간", ["스윙 (EMA 4·6·10)", "장기 (EMA 10·20·50)"], key="et_hz")
 
-EMA_SET = [20, 50, 100] if horizon.startswith("스윙") else [50, 100, 200]
+EMA_SET = [4, 6, 10] if horizon.startswith("스윙") else [10, 20, 50]
 fast, mid, slow = EMA_SET
 
 odf = None
@@ -477,15 +536,21 @@ if et_ticker:
     except Exception:
         odf = None
 
-if odf is None or odf.empty:
+if odf is not None and not odf.empty:
+    odf = odf.dropna(subset=["High", "Low", "Close"])  # 마지막 NaN 봉 제거
+
+if odf is None or odf.empty or len(odf) < 2:
     st.warning("가격 데이터를 불러오지 못했습니다. 티커를 확인하세요. (한국주는 005930.KS 형식)")
 else:
-    close = odf["Close"]
+    close = odf["Close"].dropna()
     price = float(close.iloc[-1])
     atr = float(atr_wilder(odf).iloc[-1])
     emas = {n: float(close.ewm(span=n, adjust=False).mean().iloc[-1]) for n in EMA_SET}
+    if price != price or atr != atr:
+        st.warning("최신 가격/ATR이 유효하지 않습니다. 잠시 후 다시 시도하세요.")
+        st.stop()
     ef, em, es = emas[fast], emas[mid], emas[slow]
-    ext_atr = (price - ef) / atr if atr > 0 else 0.0  # 빠른 EMA 대비 과열도(ATR 단위)
+    ext_atr = (price - es) / atr if atr > 0 else 0.0  # 추세(느린) EMA 대비 과열도(ATR 단위)
 
     # ---- 진입 적합도 판정
     if price < es:
@@ -494,7 +559,7 @@ else:
         include_now = False
     elif ext_atr > 2:
         verdict, vc, ve = "과열 — 대기", "#ef6c00", "🟠"
-        reason = f"상승추세지만 EMA{fast} 대비 단기 과열(+{ext_atr:.1f} ATR). 눌림을 기다려 분할 진입하세요."
+        reason = f"상승추세지만 EMA{slow} 대비 단기 과열(+{ext_atr:.1f} ATR). 눌림을 기다려 분할 진입하세요."
         include_now = False
     elif price < em:
         verdict, vc, ve = "분할 매수 구간", "#f9a825", "🟡"
@@ -514,7 +579,25 @@ else:
 
     mcol1, mcol2 = st.columns(2)
     mcol1.metric("현재가", money(price, et_cur))
-    mcol2.metric("ATR(14, 일봉)", money(atr, et_cur), f"{atr / price * 100:.1f}%")
+    mcol2.metric("ATR(14, 일봉)", money(atr, et_cur), f"{atr / price * 100:.1f}%",
+                 help="ATR(평균 진폭) = 이 종목이 하루에 보통 움직이는 가격 폭. 변동성 측정값입니다.")
+
+    with st.expander("ⓘ ATR이 뭔가요? (과열 판정 기준)"):
+        st.markdown(
+            f"""
+**ATR (Average True Range · 평균 진폭)** 은 이 종목이 **하루에 보통 얼마나 움직이는지**를 나타내는 변동성 지표입니다. 최근 14일간의 하루 가격 변동폭을 평균낸 값이에요.
+
+- 지금 이 종목의 ATR은 약 **{money(atr, et_cur)}** ({atr / price * 100:.1f}%) — 하루에 대략 이만큼 출렁인다는 뜻입니다.
+- ATR이 크면 변동성이 큰 종목(급등락 심함), 작으면 잔잔한 종목입니다.
+
+**왜 진입 판단에 쓰나요?** "지금 너무 올라서 과열인가?"를 단순 %(예: 추세선 위 8%)로 재면 종목마다 기준이 안 맞습니다. 변동성 큰 종목은 8% 벌어져도 정상이고, 잔잔한 종목은 4%만 벌어져도 과열이니까요. 그래서 **추세선에서 벌어진 거리를 ATR 단위로** 잽니다.
+
+- 가격이 추세 EMA보다 **+2 ATR 넘게** 위 → 평소 이틀치 변동폭만큼 벌어진 것 → **🟠 과열, 눌림 대기**
+- 추세선 근처(±1 ATR 이내) → 진입하기 무난한 위치
+
+즉 ATR은 "이 종목 기준으로 지금 가격이 비정상적으로 멀리 갔는지"를 공정하게 재주는 잣대입니다.
+            """
+        )
 
     # ---- EMA 위치표
     rows = []
