@@ -457,105 +457,97 @@ else:
     except Exception as e:
         st.error(f"FRED 데이터 로드 실패: {e}")
 
-# ---------------------------------------------------------- 리스크 · 포지션 계산기
+# ---------------------------------------------------------- 진입 타이밍
 st.divider()
-st.header("🎯 리스크 · 포지션 사이징 계산기 (ATR 스톱 · 차등 익절)")
+st.header("🎯 진입 타이밍 — 지금 들어가도 되나? (EMA 기반)")
 
-rc1, rc2, rc3, rc4 = st.columns([1.4, 1, 1, 1])
-rc_ticker = rc1.text_input("티커 (미국: MU / 한국: 005930.KS, 000660.KS)",
-                           value="MU", key="rc_tkr").strip().upper()
-currency = rc2.selectbox("통화", ["USD", "KRW"], key="rc_cur")
-direction = rc3.selectbox("방향", ["롱(매수)", "숏(매도)"], key="rc_dir")
-risk_pct = rc4.number_input("트레이드당 리스크 %", 0.1, 10.0, 1.0, 0.1, key="rc_risk")
+ec1, ec2, ec3 = st.columns([1.6, 1, 1])
+et_ticker = ec1.text_input("티커 (미국: MU / 한국: 005930.KS, 000660.KS)",
+                           value="MU", key="et_tkr").strip().upper()
+et_cur = ec2.selectbox("통화", ["USD", "KRW"], key="et_cur")
+horizon = ec3.selectbox("기간", ["스윙 (EMA 20·50·100)", "장기 (EMA 50·100·200)"], key="et_hz")
 
-rc5, rc6, rc7 = st.columns(3)
-account = rc5.number_input(f"계좌 규모 ({currency})", min_value=0.0,
-                           value=10000.0, step=100.0, key="rc_acct")
-atr_mult = rc6.number_input("ATR 배수 (스톱 폭)", 0.5, 6.0, 2.0, 0.5, key="rc_atrm")
-pos_cap = rc7.number_input("포지션 상한 (% 계좌)", 1.0, 100.0, 25.0, 1.0, key="rc_cap")
+EMA_SET = [20, 50, 100] if horizon.startswith("스윙") else [50, 100, 200]
+fast, mid, slow = EMA_SET
 
-ohlc = None
-if rc_ticker:
+odf = None
+if et_ticker:
     try:
-        ohlc = get_ohlc(rc_ticker)
+        odf = get_ohlc(et_ticker, period="2y")
     except Exception:
-        ohlc = None
+        odf = None
 
-if ohlc is None or ohlc.empty:
+if odf is None or odf.empty:
     st.warning("가격 데이터를 불러오지 못했습니다. 티커를 확인하세요. (한국주는 005930.KS 형식)")
 else:
-    last = float(ohlc["Close"].iloc[-1])
-    atr = float(atr_wilder(ohlc).iloc[-1])
-    is_long = direction.startswith("롱")
-    dec = 0 if currency == "KRW" else 2
+    close = odf["Close"]
+    price = float(close.iloc[-1])
+    atr = float(atr_wilder(odf).iloc[-1])
+    emas = {n: float(close.ewm(span=n, adjust=False).mean().iloc[-1]) for n in EMA_SET}
+    ef, em, es = emas[fast], emas[mid], emas[slow]
+    ext_atr = (price - ef) / atr if atr > 0 else 0.0  # 빠른 EMA 대비 과열도(ATR 단위)
 
-    ce, ca = st.columns(2)
-    entry = ce.number_input("진입가 (기본=현재가, 수정 가능)",
-                            value=round(last, dec), step=10.0 ** (-dec) if dec else 1.0,
-                            key="rc_entry")
-    ca.metric("ATR (14, 일봉)", money(atr, currency),
-              f"{atr / last * 100:.1f}% / 현재가 {money(last, currency)}")
-
-    if entry <= 0 or atr <= 0:
-        st.info("진입가·ATR이 유효해야 계산됩니다.")
+    # ---- 진입 적합도 판정
+    if price < es:
+        verdict, vc, ve = "진입 부적합", "#c62828", "🔴"
+        reason = f"장기 추세선(EMA{slow}) 아래 — 신규 진입 부적합. 추세 전환 확인 후 검토하세요."
+        include_now = False
+    elif ext_atr > 2:
+        verdict, vc, ve = "과열 — 대기", "#ef6c00", "🟠"
+        reason = f"상승추세지만 EMA{fast} 대비 단기 과열(+{ext_atr:.1f} ATR). 눌림을 기다려 분할 진입하세요."
+        include_now = False
+    elif price < em:
+        verdict, vc, ve = "분할 매수 구간", "#f9a825", "🟡"
+        reason = f"장기추세 위·중기(EMA{mid}) 아래의 눌림 구간. 지금부터 분할 매수 적합."
+        include_now = True
     else:
-        stop_dist = atr_mult * atr
-        stop = entry - stop_dist if is_long else entry + stop_dist
-        risk_amt = account * risk_pct / 100.0
-        shares = int(risk_amt // stop_dist) if stop_dist > 0 else 0
-        notional = shares * entry
-        pos_pct = (notional / account * 100.0) if account > 0 else 0.0
-        capped = pos_pct > pos_cap
-        if capped and account > 0:
-            shares = int((account * pos_cap / 100.0) // entry)
-            notional = shares * entry
-            pos_pct = notional / account * 100.0
-        actual_risk = shares * stop_dist
-        actual_risk_pct = (actual_risk / account * 100.0) if account > 0 else 0.0
+        verdict, vc, ve = "진입 양호", "#2e7d32", "🟢"
+        reason = "상승추세 + 과열 아님 — 분할 진입 양호."
+        include_now = True
 
-        k1, k2, k3, k4 = st.columns(4)
-        k1.metric("주문 수량", f"{shares:,} 주")
-        k2.metric("스톱가", money(stop, currency),
-                  f"-{stop_dist / entry * 100:.1f}%" if is_long else f"+{stop_dist / entry * 100:.1f}%")
-        k3.metric("포지션 금액", money(notional, currency), f"{pos_pct:.1f}% 계좌")
-        k4.metric("트레이드 리스크", money(actual_risk, currency), f"{actual_risk_pct:.2f}% 계좌")
+    st.markdown(
+        f"<div style='padding:16px 20px;border-radius:12px;background:{vc};color:#fff;'>"
+        f"<span style='font-size:28px;font-weight:800'>{ve} {verdict}</span><br>"
+        f"<span style='font-size:15px;opacity:.95'>{reason}</span></div>",
+        unsafe_allow_html=True,
+    )
 
-        if capped:
-            st.warning(f"포지션 상한({pos_cap:.0f}%)에 걸려 수량이 축소됐습니다. "
-                       f"실제 리스크가 목표 {risk_pct:.1f}%보다 작아집니다({actual_risk_pct:.2f}%).")
-        if shares == 0:
-            st.error("계산된 수량이 0입니다 — 계좌 규모를 늘리거나 ATR 배수/리스크%를 조정하세요.")
+    mcol1, mcol2 = st.columns(2)
+    mcol1.metric("현재가", money(price, et_cur))
+    mcol2.metric("ATR(14, 일봉)", money(atr, et_cur), f"{atr / price * 100:.1f}%")
 
-        with st.expander("차등 익절 사다리 설정"):
-            t1, t2, t3 = st.columns(3)
-            m1 = t1.number_input("TP1 (R 배수)", 0.5, 10.0, 1.0, 0.5, key="rc_m1")
-            f1 = t1.number_input("TP1 비중 %", 0, 100, 33, 1, key="rc_f1")
-            m2 = t2.number_input("TP2 (R 배수)", 0.5, 10.0, 2.0, 0.5, key="rc_m2")
-            f2 = t2.number_input("TP2 비중 %", 0, 100, 33, 1, key="rc_f2")
-            m3 = t3.number_input("TP3 (R 배수)", 0.5, 10.0, 3.0, 0.5, key="rc_m3")
-            f3 = t3.number_input("TP3 비중 %", 0, 100, 34, 1, key="rc_f3")
+    # ---- EMA 위치표
+    rows = []
+    for n in EMA_SET:
+        v = emas[n]
+        rows.append({"EMA": f"EMA{n}", "값": money(v, et_cur),
+                     "현재가 대비": f"{(price / v - 1) * 100:+.1f}%",
+                     "위치": "지지 (아래)" if v < price else "저항 (위)"})
+    st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
 
-        R = stop_dist  # 1R = 주당 리스크(=스톱 거리)
-        ladder, total_profit, sold = [], 0.0, 0
-        for tag, m, f in [("TP1", m1, f1), ("TP2", m2, f2), ("TP3", m3, f3)]:
-            tp = entry + m * R if is_long else entry - m * R
-            sh = int(round(shares * f / 100.0))
-            sold += sh
-            pl = sh * (tp - entry) * (1 if is_long else -1)
-            total_profit += pl
-            ladder.append({"구간": f"{tag} ({m:g}R)", "가격": money(tp, currency),
-                           "매도 수량": f"{sh:,} 주", "구간 손익": money(pl, currency)})
-        df_lad = pd.DataFrame(ladder)
-        st.dataframe(df_lad, hide_index=True, use_container_width=True)
+    # ---- 분할 진입 사다리 (현재가 아래 EMA = 눌림 매수 목표)
+    below = sorted([n for n in EMA_SET if emas[n] < price], key=lambda n: emas[n], reverse=True)
+    levels = []
+    if include_now:
+        levels.append(("지금 (현재가)", price, 1.0))
+    w = 1.3
+    for n in below:
+        levels.append((f"EMA{n} 도달 시", emas[n], w))
+        w += 0.6  # 더 깊은 눌림일수록 비중 ↑
 
-        rr = (total_profit / actual_risk) if actual_risk > 0 else float("nan")
-        s1, s2 = st.columns(2)
-        s1.metric("사다리 전부 도달 시 총 손익", money(total_profit, currency))
-        s2.metric("기대 손익비 (R)", f"{rr:.2f}R" if rr == rr else "—")
-        if sold != shares:
-            st.caption(f"※ 반올림으로 사다리 합({sold}주)이 총 수량({shares}주)과 약간 다를 수 있습니다.")
-        st.caption("실무 팁: TP1 도달 후 스톱을 본전(진입가)으로 올리면 남은 포지션이 무위험 구간으로 전환됩니다. "
-                   "ATR은 일봉 기준이며, 변동성 급변 시 배수를 키우는 게 안전합니다. 매매 신호가 아니라 사이징 규율 도구입니다.")
+    st.subheader("분할 진입 사다리")
+    if not levels:
+        st.info("현재가 아래에 지지 EMA가 없습니다 — 지지선이 없으니 관망을 권합니다.")
+    else:
+        tw = sum(l[2] for l in levels)
+        lad = [{"도달 조건": nm, "가격": money(px, et_cur),
+                "진입 비중": f"{wt / tw * 100:.0f}%"} for nm, px, wt in levels]
+        st.dataframe(pd.DataFrame(lad), hide_index=True, use_container_width=True)
+        st.caption("비중 = 계획한 전체 포지션 대비 %. 아래 EMA로 내려갈수록 더 담는 분할 매수 구조입니다.")
+        if verdict.startswith("진입 부적합"):
+            st.warning("추세가 하락이라 하단 EMA로 물타기는 위험할 수 있습니다. 참고용으로만 보세요.")
+
+    st.caption("추세추종 진입 가이드일 뿐 수익을 보장하지 않습니다. ATR·EMA는 일봉 기준이며 변동성 급변 시 신호가 흔들릴 수 있습니다.")
 
 with st.expander("계산 방식 / 데이터 한계"):
     st.markdown(
