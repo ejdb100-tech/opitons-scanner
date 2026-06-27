@@ -82,6 +82,26 @@ def get_chain(ticker: str, expiries: tuple):
     return cdf, pdf
 
 
+@st.cache_data(ttl=900, show_spinner=False)
+def get_ohlc(ticker: str, period: str = "4mo"):
+    return yf.Ticker(ticker).history(period=period)
+
+
+def atr_wilder(df, n=14):
+    h, l, c = df["High"], df["Low"], df["Close"]
+    pc = c.shift(1)
+    tr = pd.concat([h - l, (h - pc).abs(), (l - pc).abs()], axis=1).max(axis=1)
+    return tr.ewm(alpha=1 / n, adjust=False).mean()
+
+
+def money(x, cur):
+    if x != x:
+        return "—"
+    sym = "₩" if cur == "KRW" else "$"
+    dec = 0 if cur == "KRW" else 2
+    return f"{sym}{x:,.{dec}f}"
+
+
 # ============================================================ 분석
 def compute_max_pain(calls, puts):
     c = calls.groupby("strike")["openInterest"].sum()
@@ -436,6 +456,106 @@ else:
         )
     except Exception as e:
         st.error(f"FRED 데이터 로드 실패: {e}")
+
+# ---------------------------------------------------------- 리스크 · 포지션 계산기
+st.divider()
+st.header("🎯 리스크 · 포지션 사이징 계산기 (ATR 스톱 · 차등 익절)")
+
+rc1, rc2, rc3, rc4 = st.columns([1.4, 1, 1, 1])
+rc_ticker = rc1.text_input("티커 (미국: MU / 한국: 005930.KS, 000660.KS)",
+                           value="MU", key="rc_tkr").strip().upper()
+currency = rc2.selectbox("통화", ["USD", "KRW"], key="rc_cur")
+direction = rc3.selectbox("방향", ["롱(매수)", "숏(매도)"], key="rc_dir")
+risk_pct = rc4.number_input("트레이드당 리스크 %", 0.1, 10.0, 1.0, 0.1, key="rc_risk")
+
+rc5, rc6, rc7 = st.columns(3)
+account = rc5.number_input(f"계좌 규모 ({currency})", min_value=0.0,
+                           value=10000.0, step=100.0, key="rc_acct")
+atr_mult = rc6.number_input("ATR 배수 (스톱 폭)", 0.5, 6.0, 2.0, 0.5, key="rc_atrm")
+pos_cap = rc7.number_input("포지션 상한 (% 계좌)", 1.0, 100.0, 25.0, 1.0, key="rc_cap")
+
+ohlc = None
+if rc_ticker:
+    try:
+        ohlc = get_ohlc(rc_ticker)
+    except Exception:
+        ohlc = None
+
+if ohlc is None or ohlc.empty:
+    st.warning("가격 데이터를 불러오지 못했습니다. 티커를 확인하세요. (한국주는 005930.KS 형식)")
+else:
+    last = float(ohlc["Close"].iloc[-1])
+    atr = float(atr_wilder(ohlc).iloc[-1])
+    is_long = direction.startswith("롱")
+    dec = 0 if currency == "KRW" else 2
+
+    ce, ca = st.columns(2)
+    entry = ce.number_input("진입가 (기본=현재가, 수정 가능)",
+                            value=round(last, dec), step=10.0 ** (-dec) if dec else 1.0,
+                            key="rc_entry")
+    ca.metric("ATR (14, 일봉)", money(atr, currency),
+              f"{atr / last * 100:.1f}% / 현재가 {money(last, currency)}")
+
+    if entry <= 0 or atr <= 0:
+        st.info("진입가·ATR이 유효해야 계산됩니다.")
+    else:
+        stop_dist = atr_mult * atr
+        stop = entry - stop_dist if is_long else entry + stop_dist
+        risk_amt = account * risk_pct / 100.0
+        shares = int(risk_amt // stop_dist) if stop_dist > 0 else 0
+        notional = shares * entry
+        pos_pct = (notional / account * 100.0) if account > 0 else 0.0
+        capped = pos_pct > pos_cap
+        if capped and account > 0:
+            shares = int((account * pos_cap / 100.0) // entry)
+            notional = shares * entry
+            pos_pct = notional / account * 100.0
+        actual_risk = shares * stop_dist
+        actual_risk_pct = (actual_risk / account * 100.0) if account > 0 else 0.0
+
+        k1, k2, k3, k4 = st.columns(4)
+        k1.metric("주문 수량", f"{shares:,} 주")
+        k2.metric("스톱가", money(stop, currency),
+                  f"-{stop_dist / entry * 100:.1f}%" if is_long else f"+{stop_dist / entry * 100:.1f}%")
+        k3.metric("포지션 금액", money(notional, currency), f"{pos_pct:.1f}% 계좌")
+        k4.metric("트레이드 리스크", money(actual_risk, currency), f"{actual_risk_pct:.2f}% 계좌")
+
+        if capped:
+            st.warning(f"포지션 상한({pos_cap:.0f}%)에 걸려 수량이 축소됐습니다. "
+                       f"실제 리스크가 목표 {risk_pct:.1f}%보다 작아집니다({actual_risk_pct:.2f}%).")
+        if shares == 0:
+            st.error("계산된 수량이 0입니다 — 계좌 규모를 늘리거나 ATR 배수/리스크%를 조정하세요.")
+
+        with st.expander("차등 익절 사다리 설정"):
+            t1, t2, t3 = st.columns(3)
+            m1 = t1.number_input("TP1 (R 배수)", 0.5, 10.0, 1.0, 0.5, key="rc_m1")
+            f1 = t1.number_input("TP1 비중 %", 0, 100, 33, 1, key="rc_f1")
+            m2 = t2.number_input("TP2 (R 배수)", 0.5, 10.0, 2.0, 0.5, key="rc_m2")
+            f2 = t2.number_input("TP2 비중 %", 0, 100, 33, 1, key="rc_f2")
+            m3 = t3.number_input("TP3 (R 배수)", 0.5, 10.0, 3.0, 0.5, key="rc_m3")
+            f3 = t3.number_input("TP3 비중 %", 0, 100, 34, 1, key="rc_f3")
+
+        R = stop_dist  # 1R = 주당 리스크(=스톱 거리)
+        ladder, total_profit, sold = [], 0.0, 0
+        for tag, m, f in [("TP1", m1, f1), ("TP2", m2, f2), ("TP3", m3, f3)]:
+            tp = entry + m * R if is_long else entry - m * R
+            sh = int(round(shares * f / 100.0))
+            sold += sh
+            pl = sh * (tp - entry) * (1 if is_long else -1)
+            total_profit += pl
+            ladder.append({"구간": f"{tag} ({m:g}R)", "가격": money(tp, currency),
+                           "매도 수량": f"{sh:,} 주", "구간 손익": money(pl, currency)})
+        df_lad = pd.DataFrame(ladder)
+        st.dataframe(df_lad, hide_index=True, use_container_width=True)
+
+        rr = (total_profit / actual_risk) if actual_risk > 0 else float("nan")
+        s1, s2 = st.columns(2)
+        s1.metric("사다리 전부 도달 시 총 손익", money(total_profit, currency))
+        s2.metric("기대 손익비 (R)", f"{rr:.2f}R" if rr == rr else "—")
+        if sold != shares:
+            st.caption(f"※ 반올림으로 사다리 합({sold}주)이 총 수량({shares}주)과 약간 다를 수 있습니다.")
+        st.caption("실무 팁: TP1 도달 후 스톱을 본전(진입가)으로 올리면 남은 포지션이 무위험 구간으로 전환됩니다. "
+                   "ATR은 일봉 기준이며, 변동성 급변 시 배수를 키우는 게 안전합니다. 매매 신호가 아니라 사이징 규율 도구입니다.")
 
 with st.expander("계산 방식 / 데이터 한계"):
     st.markdown(
