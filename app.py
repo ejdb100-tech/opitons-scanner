@@ -499,40 +499,40 @@ else:
 
 # ---------------------------------------------------------- 진입 타이밍
 st.divider()
-st.header("🎯 진입 타이밍 — 지금 들어가도 되나? (EMA 기반)")
+st.header("🎯 진입 타이밍 — 지금 들어가도 되나? (10 EMA · 21 EMA · 50 SMA · 200 SMA)")
 
-with st.expander("ⓘ 이 도구 사용법 (EMA · 신호등 · 분할 사다리)"):
+with st.expander("ⓘ 이 도구 사용법 (이평선 · 신호등 · 분할 사다리)"):
     st.markdown(
         """
 **무엇을 하나요?** 티커를 넣으면 "지금 이 종목에 신규 진입해도 괜찮은 자리인가"를 신호등으로 알려주고, 어느 가격대에서 얼마씩 나눠 사면 좋을지 사다리를 제시합니다.
 
-**EMA (지수이동평균)** — 최근 가격을 평균낸 '추세선'입니다. 최근 값에 더 큰 가중치를 줘서 단순 평균보다 빠르게 반응합니다. 숫자가 작을수록(EMA4) 빠르고 민감, 클수록(EMA50) 느리고 큰 추세를 봅니다.
-- **스윙(EMA 4·6·10)** — 며칠~몇 주짜리 단기 매매용. 반응 빠른 대신 신호가 자주 바뀝니다.
-- **장기(EMA 10·20·50)** — 몇 주~몇 달짜리 포지션용. 더 안정적입니다.
+**이동평균선(이평선)** — 최근 가격을 평균낸 '추세선'입니다. 숫자가 작을수록 빠르고 민감, 클수록 느리고 큰 추세를 봅니다.
+- **EMA(지수이동평균)** — 최근 값에 더 큰 가중치 → 빠르게 반응. 단기 모멘텀용.
+- **SMA(단순이동평균)** — 기간 전체를 똑같이 평균 → 더 안정적. 장기 추세용.
 
-**신호등 판정** — 가격이 추세 EMA(가장 느린 것) 위에 있고 과열만 아니면 진입에 우호적이라는 원칙입니다.
+이 도구는 **10 EMA · 21 EMA**(단기 모멘텀)와 **50 SMA · 200 SMA**(장기 추세)를 함께 봅니다. 특히 **200 SMA**는 강세장/약세장을 가르는 가장 중요한 장기 추세선입니다.
+
+**신호등 판정** — 가격이 200 SMA(장기 추세) 위에 있고 과열만 아니면 진입에 우호적이라는 원칙입니다.
 - 🟢 **진입 양호** — 상승추세 + 과열 아님. 들어가기 좋은 자리.
-- 🟡 **분할 매수 구간** — 추세 위지만 중간 EMA 아래로 눌린 상태. 나눠 사기 좋음.
-- 🟠 **과열 — 대기** — 추세선에서 너무 위로 벌어짐(+2 ATR 초과). 눌림을 기다리세요.
-- 🔴 **진입 부적합** — 추세선 아래(하락추세). 신규 진입은 피하는 게 안전.
+- 🟡 **분할 매수 구간** — 추세 위지만 50 SMA 아래로 눌린 상태. 나눠 사기 좋음.
+- 🟠 **과열 — 대기** — 21 EMA에서 너무 위로 벌어짐(+2 ATR 초과). 눌림을 기다리세요.
+- 🔴 **진입 부적합** — 200 SMA 아래(장기 하락추세). 신규 진입은 피하는 게 안전.
 
-**분할 진입 사다리** — 한 번에 다 사지 말고 여러 가격대에 나눠 담는 계획표입니다. 현재가 아래의 EMA들을 '눌림 매수 목표'로 잡고, **더 깊이 내려갈수록 더 많은 비중**을 배정합니다. 예: 지금 20%, EMA 도달 시 30%, 더 아래 EMA에서 50%. 평균 단가를 낮추면서 분할로 모으는 방식입니다.
+**분할 진입 사다리** — 한 번에 다 사지 말고 여러 가격대에 나눠 담는 계획표입니다. 현재가 아래의 이평선들을 '눌림 매수 목표'로 잡고, **더 깊이 내려갈수록 더 많은 비중**을 배정합니다. 예: 지금 20%, 21 EMA 도달 시 30%, 더 아래 50 SMA에서 50%. 평균 단가를 낮추며 분할로 모으는 방식입니다.
         """
     )
 
-ec1, ec2, ec3 = st.columns([1.6, 1, 1])
+MA_SPEC = [(10, "EMA"), (21, "EMA"), (50, "SMA"), (200, "SMA")]
+
+ec1, ec2 = st.columns([2, 1])
 et_ticker = ec1.text_input("티커 (미국: MU / 한국: 005930.KS, 000660.KS)",
                            value="MU", key="et_tkr").strip().upper()
 et_cur = ec2.selectbox("통화", ["USD", "KRW"], key="et_cur")
-horizon = ec3.selectbox("기간", ["스윙 (EMA 4·6·10)", "장기 (EMA 10·20·50)"], key="et_hz")
-
-EMA_SET = [4, 6, 10] if horizon.startswith("스윙") else [10, 20, 50]
-fast, mid, slow = EMA_SET
 
 odf = None
 if et_ticker:
     try:
-        odf = get_ohlc(et_ticker, period="2y")
+        odf = get_ohlc(et_ticker, period="3y")
     except Exception:
         odf = None
 
@@ -545,25 +545,50 @@ else:
     close = odf["Close"].dropna()
     price = float(close.iloc[-1])
     atr = float(atr_wilder(odf).iloc[-1])
-    emas = {n: float(close.ewm(span=n, adjust=False).mean().iloc[-1]) for n in EMA_SET}
     if price != price or atr != atr:
         st.warning("최신 가격/ATR이 유효하지 않습니다. 잠시 후 다시 시도하세요.")
         st.stop()
-    ef, em, es = emas[fast], emas[mid], emas[slow]
-    ext_atr = (price - es) / atr if atr > 0 else 0.0  # 추세(느린) EMA 대비 과열도(ATR 단위)
+
+    def ma_last(period, kind):
+        if kind == "EMA":
+            s = close.ewm(span=period, adjust=False).mean()
+        else:
+            s = close.rolling(period, min_periods=period).mean()
+        return float(s.iloc[-1])
+
+    mas = [{"name": f"{p} {k}", "period": p, "kind": k, "val": ma_last(p, k)}
+           for p, k in MA_SPEC]
+    mv = {m["period"]: m["val"] for m in mas}
+    ema10, ema21, sma50, sma200 = mv[10], mv[21], mv[50], mv[200]
+
+    valid = [m for m in mas if m["val"] == m["val"]]
+    if sma200 == sma200:
+        anchor, anchor_name = sma200, "200 SMA"
+    elif valid:
+        lm = max(valid, key=lambda m: m["period"])
+        anchor, anchor_name = lm["val"], lm["name"]
+    else:
+        anchor, anchor_name = float("nan"), "—"
+
+    ext_ref = ema21 if ema21 == ema21 else (ema10 if ema10 == ema10 else anchor)
+    ext_atr = (price - ext_ref) / atr if (atr > 0 and ext_ref == ext_ref) else 0.0
 
     # ---- 진입 적합도 판정
-    if price < es:
+    if anchor != anchor:
+        verdict, vc, ve = "판정 보류", "#666666", "⚪"
+        reason = "이동평균 계산에 필요한 데이터가 부족합니다 (상장 초기 등)."
+        include_now = False
+    elif price < anchor:
         verdict, vc, ve = "진입 부적합", "#c62828", "🔴"
-        reason = f"장기 추세선(EMA{slow}) 아래 — 신규 진입 부적합. 추세 전환 확인 후 검토하세요."
+        reason = f"장기 추세선({anchor_name}) 아래 — 신규 진입 부적합. 추세 전환 확인 후 검토하세요."
         include_now = False
     elif ext_atr > 2:
         verdict, vc, ve = "과열 — 대기", "#ef6c00", "🟠"
-        reason = f"상승추세지만 EMA{slow} 대비 단기 과열(+{ext_atr:.1f} ATR). 눌림을 기다려 분할 진입하세요."
+        reason = f"상승추세지만 21 EMA 대비 단기 과열(+{ext_atr:.1f} ATR). 눌림을 기다려 분할 진입하세요."
         include_now = False
-    elif price < em:
+    elif sma50 == sma50 and price < sma50:
         verdict, vc, ve = "분할 매수 구간", "#f9a825", "🟡"
-        reason = f"장기추세 위·중기(EMA{mid}) 아래의 눌림 구간. 지금부터 분할 매수 적합."
+        reason = "장기추세(200 SMA) 위·50 SMA 아래의 눌림 구간. 지금부터 분할 매수 적합."
         include_now = True
     else:
         verdict, vc, ve = "진입 양호", "#2e7d32", "🟢"
@@ -590,47 +615,52 @@ else:
 - 지금 이 종목의 ATR은 약 **{money(atr, et_cur)}** ({atr / price * 100:.1f}%) — 하루에 대략 이만큼 출렁인다는 뜻입니다.
 - ATR이 크면 변동성이 큰 종목(급등락 심함), 작으면 잔잔한 종목입니다.
 
-**왜 진입 판단에 쓰나요?** "지금 너무 올라서 과열인가?"를 단순 %(예: 추세선 위 8%)로 재면 종목마다 기준이 안 맞습니다. 변동성 큰 종목은 8% 벌어져도 정상이고, 잔잔한 종목은 4%만 벌어져도 과열이니까요. 그래서 **추세선에서 벌어진 거리를 ATR 단위로** 잽니다.
+**왜 진입 판단에 쓰나요?** "지금 너무 올라서 과열인가?"를 단순 %(예: 추세선 위 8%)로 재면 종목마다 기준이 안 맞습니다. 변동성 큰 종목은 8% 벌어져도 정상이고, 잔잔한 종목은 4%만 벌어져도 과열이니까요. 그래서 **기준 이평선(21 EMA)에서 벌어진 거리를 ATR 단위로** 잽니다.
 
-- 가격이 추세 EMA보다 **+2 ATR 넘게** 위 → 평소 이틀치 변동폭만큼 벌어진 것 → **🟠 과열, 눌림 대기**
-- 추세선 근처(±1 ATR 이내) → 진입하기 무난한 위치
+- 가격이 21 EMA보다 **+2 ATR 넘게** 위 → 평소 이틀치 변동폭만큼 벌어진 것 → **🟠 과열, 눌림 대기**
+- 21 EMA 근처(±1 ATR 이내) → 진입하기 무난한 위치
 
 즉 ATR은 "이 종목 기준으로 지금 가격이 비정상적으로 멀리 갔는지"를 공정하게 재주는 잣대입니다.
             """
         )
 
-    # ---- EMA 위치표
+    # ---- 이평선 위치표
     rows = []
-    for n in EMA_SET:
-        v = emas[n]
-        rows.append({"EMA": f"EMA{n}", "값": money(v, et_cur),
-                     "현재가 대비": f"{(price / v - 1) * 100:+.1f}%",
-                     "위치": "지지 (아래)" if v < price else "저항 (위)"})
+    for m in mas:
+        v = m["val"]
+        if v == v:
+            rows.append({"이평선": m["name"], "값": money(v, et_cur),
+                         "현재가 대비": f"{(price / v - 1) * 100:+.1f}%",
+                         "위치": "지지 (아래)" if v < price else "저항 (위)"})
+        else:
+            rows.append({"이평선": m["name"], "값": "데이터 부족",
+                         "현재가 대비": "—", "위치": "—"})
     st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
 
-    # ---- 분할 진입 사다리 (현재가 아래 EMA = 눌림 매수 목표)
-    below = sorted([n for n in EMA_SET if emas[n] < price], key=lambda n: emas[n], reverse=True)
+    # ---- 분할 진입 사다리 (현재가 아래 이평선 = 눌림 매수 목표)
+    below = sorted([m for m in mas if m["val"] == m["val"] and m["val"] < price],
+                   key=lambda m: m["val"], reverse=True)
     levels = []
     if include_now:
         levels.append(("지금 (현재가)", price, 1.0))
     w = 1.3
-    for n in below:
-        levels.append((f"EMA{n} 도달 시", emas[n], w))
+    for m in below:
+        levels.append((f"{m['name']} 도달 시", m["val"], w))
         w += 0.6  # 더 깊은 눌림일수록 비중 ↑
 
     st.subheader("분할 진입 사다리")
     if not levels:
-        st.info("현재가 아래에 지지 EMA가 없습니다 — 지지선이 없으니 관망을 권합니다.")
+        st.info("현재가 아래에 지지 이평선이 없습니다 — 지지선이 없으니 관망을 권합니다.")
     else:
         tw = sum(l[2] for l in levels)
         lad = [{"도달 조건": nm, "가격": money(px, et_cur),
                 "진입 비중": f"{wt / tw * 100:.0f}%"} for nm, px, wt in levels]
         st.dataframe(pd.DataFrame(lad), hide_index=True, use_container_width=True)
-        st.caption("비중 = 계획한 전체 포지션 대비 %. 아래 EMA로 내려갈수록 더 담는 분할 매수 구조입니다.")
+        st.caption("비중 = 계획한 전체 포지션 대비 %. 아래 이평선으로 내려갈수록 더 담는 분할 매수 구조입니다.")
         if verdict.startswith("진입 부적합"):
-            st.warning("추세가 하락이라 하단 EMA로 물타기는 위험할 수 있습니다. 참고용으로만 보세요.")
+            st.warning("추세가 하락이라 하단 이평선으로 물타기는 위험할 수 있습니다. 참고용으로만 보세요.")
 
-    st.caption("추세추종 진입 가이드일 뿐 수익을 보장하지 않습니다. ATR·EMA는 일봉 기준이며 변동성 급변 시 신호가 흔들릴 수 있습니다.")
+    st.caption("추세추종 진입 가이드일 뿐 수익을 보장하지 않습니다. 이평선·ATR은 일봉 기준이며 변동성 급변 시 신호가 흔들릴 수 있습니다.")
 
 with st.expander("계산 방식 / 데이터 한계"):
     st.markdown(
