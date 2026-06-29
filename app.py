@@ -15,6 +15,7 @@ from datetime import datetime, timezone
 
 st.set_page_config(page_title="옵션 스캐너 — Max Pain / Walls", layout="wide")
 R = 0.045  # 무위험금리 근사(감마용)
+APP_BUILD = "2026-06-29e"  # 배포 버전 확인용
 
 
 # ============================================================ 만기 유틸
@@ -161,6 +162,22 @@ def by_strike(calls, puts):
     return pd.DataFrame({"strike": ks,
                          "call": [c.get(k, 0) for k in ks],
                          "put": [p.get(k, 0) for k in ks]})
+
+
+def chain_health(ticker, expiry, spot):
+    """원본 체인이 정상인지 진단용 요약."""
+    calls, puts = get_chain(ticker, (expiry,))
+    c = calls.groupby("strike")["openInterest"].sum()
+    p = puts.groupby("strike")["openInterest"].sum()
+    return {
+        "만기": expiry,
+        "콜 행사가수": int((c > 0).sum()) if len(c) else 0,
+        "풋 행사가수": int((p > 0).sum()) if len(p) else 0,
+        "콜 총OI": int(c.sum()) if len(c) else 0,
+        "풋 총OI": int(p.sum()) if len(p) else 0,
+        "콜 최대OI 행사가": float(c.idxmax()) if len(c) and c.max() > 0 else float("nan"),
+        "풋 최대OI 행사가": float(p.idxmax()) if len(p) and p.max() > 0 else float("nan"),
+    }
 
 
 def bs_gamma(S, K, T, r, sigma):
@@ -318,7 +335,7 @@ def detail_panel(col, ticker, spot, expiry):
 
 # ============================================================ UI
 st.title("미국 개별주 옵션 스캐너 — Max Pain · Call Wall · Put Wall")
-st.caption("데이터: Yahoo Finance(약 15분 지연, OI는 보통 전일 종가 기준). 보조 지표일 뿐 매매 신호가 아닙니다.")
+st.caption(f"build {APP_BUILD} · 데이터: Yahoo Finance(약 15분 지연, OI는 보통 전일 종가 기준). 보조 지표일 뿐 매매 신호가 아닙니다.")
 
 with st.expander("ⓘ 옵션 용어 설명 (맥스페인 · 콜월 · 풋월 · OI)"):
     st.markdown(
@@ -410,6 +427,7 @@ with tab_detail:
             spot = get_spot(sel_t)
             months = [e for e in exps if is_monthly(e)]
             weeks = [e for e in exps if not is_monthly(e)]
+            me = we = None
             cL, cR = st.columns(2)
             with cL:
                 st.subheader("월물")
@@ -427,6 +445,27 @@ with tab_detail:
                     detail_panel(cR, sel_t, spot, we)
                 else:
                     st.info("주물 없음")
+
+            with st.expander("🔧 데이터 진단 — 원본 체인 상태 (숫자가 이상하면 여기부터)"):
+                st.caption("총 OI가 비정상적으로 작거나(예: 수백 미만) 행사가 수가 적으면 = Yahoo가 데이터를 제대로 못 준 것"
+                           "(공용 IP 레이트리밋 등). 그러면 맥스페인·벽이 전부 엉터리로 나옵니다. 이 경우 잠시 후 새로고침하세요.")
+                hrows = []
+                for tag, e in [("월물", me), ("주물", we)]:
+                    if e:
+                        try:
+                            hrows.append({"종류": tag, **chain_health(sel_t, e, spot)})
+                        except Exception as ex:
+                            hrows.append({"종류": tag, "만기": e, "콜 총OI": f"오류: {ex}"})
+                if hrows:
+                    st.dataframe(pd.DataFrame(hrows), hide_index=True, use_container_width=True)
+                if we:
+                    calls_w, puts_w = get_chain(sel_t, (we,))
+                    bs = by_strike(calls_w, puts_w)
+                    if spot == spot:
+                        bs = bs[(bs.strike >= spot * 0.8) & (bs.strike <= spot * 1.2)]
+                    bs = bs.rename(columns={"strike": "행사가", "call": "콜 OI", "put": "풋 OI"})
+                    st.caption(f"주물({we}) 현재가 ±20% 구간 OI 분포 — 직접 눈으로 확인:")
+                    st.dataframe(bs, hide_index=True, use_container_width=True)
 
             with st.expander("감마 프로파일(GEX) — 선택한 월물 기준"):
                 if months:
