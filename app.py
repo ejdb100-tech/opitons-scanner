@@ -33,8 +33,13 @@ def years_to_exp(e: str) -> float:
     return max((d - datetime.now(timezone.utc)).days, 0) / 365.0 + 1e-4
 
 
-def nearest(exps, monthly: bool):
-    pool = [e for e in exps if is_monthly(e) == monthly]
+def days_to_exp(e: str) -> int:
+    d = datetime.strptime(e, "%Y-%m-%d").date()
+    return (d - datetime.now(timezone.utc).date()).days
+
+
+def nearest(exps, monthly: bool, min_days: int = 0):
+    pool = [e for e in exps if is_monthly(e) == monthly and days_to_exp(e) >= min_days]
     return pool[0] if pool else None  # yfinance는 오름차순 정렬
 
 
@@ -132,12 +137,21 @@ def compute_max_pain(calls, puts):
     return float(strikes[int(np.argmin(total))]), df
 
 
-def oi_walls(calls, puts):
+def oi_walls(calls, puts, spot=None):
     c = calls.groupby("strike")["openInterest"].sum()
     p = puts.groupby("strike")["openInterest"].sum()
-    cw = float(c.idxmax()) if len(c) and c.max() > 0 else np.nan
-    pw = float(p.idxmax()) if len(p) and p.max() > 0 else np.nan
-    return cw, pw
+
+    def pick(series, side):
+        if series is None or len(series) == 0 or series.max() <= 0:
+            return np.nan
+        if spot is not None and spot == spot:
+            # 콜월=저항(현재가 이상), 풋월=지지(현재가 이하)
+            sub = series[series.index >= spot] if side == "call" else series[series.index <= spot]
+            if len(sub) and sub.max() > 0:
+                return float(sub.idxmax())
+        return float(series.idxmax())  # 해당 쪽 OI가 없으면 전체에서
+
+    return pick(c, "call"), pick(p, "put")
 
 
 def by_strike(calls, puts):
@@ -165,7 +179,7 @@ def gamma_by_strike(side, spot):
 
 
 @st.cache_data(ttl=300, show_spinner=False)
-def scan_one(ticker: str):
+def scan_one(ticker: str, weekly_min_days: int = 2):
     ticker = ticker.upper().strip()
     out = {"티커": ticker}
     try:
@@ -176,12 +190,13 @@ def scan_one(ticker: str):
         spot = get_spot(ticker)
         out["현재가"] = spot
         for tag, monthly in [("월", True), ("주", False)]:
-            e = nearest(exps, monthly)
+            md = 0 if monthly else weekly_min_days  # 주물만 임박분 건너뛰기
+            e = nearest(exps, monthly, md)
             if e is None:
                 continue
             calls, puts = get_chain(ticker, (e,))
             mp, _ = compute_max_pain(calls, puts)
-            cw, pw = oi_walls(calls, puts)
+            cw, pw = oi_walls(calls, puts, spot)
             out[f"{tag}_만기"] = e
             out[f"{tag}_MaxPain"] = mp
             out[f"{tag}_콜월"] = cw
@@ -288,7 +303,7 @@ def detail_panel(col, ticker, spot, expiry):
         col.warning("체인이 비어 있습니다.")
         return
     mp, _ = compute_max_pain(calls, puts)
-    cw, pw = oi_walls(calls, puts)
+    cw, pw = oi_walls(calls, puts, spot)
     col.markdown(f"**{exp_label(expiry)}**")
     a, b, c, d = col.columns(4)
     a.metric("MaxPain", f"{mp:,.1f}" if mp == mp else "—")
@@ -329,13 +344,16 @@ tab_scan, tab_detail = st.tabs(["📊 스캐너", "🔍 종목 상세 (월물 / 
 
 # ---------------------------------------------------------- 스캐너
 with tab_scan:
+    wk_min = st.number_input("주물 최소 잔존일수 (이보다 임박한 주물은 건너뜀)",
+                             min_value=0, max_value=14, value=2, step=1,
+                             help="0~1로 두면 0DTE/1DTE 포함. 2면 오늘·내일 만기는 건너뛰고 며칠 여유 있는 주물을 잡습니다.")
     if not tickers:
         st.info("티커를 입력하세요.")
     else:
         prog = st.progress(0.0, text="스캔 중...")
         rows = []
         for i, t in enumerate(tickers, 1):
-            rows.append(scan_one(t))
+            rows.append(scan_one(t, int(wk_min)))
             prog.progress(i / len(tickers), text=f"스캔 중... {t}")
         prog.empty()
         df = pd.DataFrame(rows)
