@@ -370,7 +370,6 @@ with tab_scan:
                 show[f"{tag}·{nm}"] = cells
         if "비고" in df:
             show["비고"] = df["비고"]
-        show["현재가"] = show["현재가"].map(lambda v: f"{v:,.2f}" if v == v else "—")
 
         st.dataframe(show, use_container_width=True, hide_index=True)
         st.caption("괄호 값 = 현재가 대비 거리. 콜월=저항·풋월=지지로 흔히 해석. "
