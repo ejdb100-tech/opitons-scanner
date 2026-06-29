@@ -95,11 +95,26 @@ def atr_wilder(df, n=14):
 
 
 def money(x, cur):
-    if x != x:
+    try:
+        x = float(x)
+        if x != x:
+            return "—"
+    except (ValueError, TypeError):
         return "—"
     sym = "₩" if cur == "KRW" else "$"
     dec = 0 if cur == "KRW" else 2
     return f"{sym}{x:,.{dec}f}"
+
+
+def fnum(v, dec=2):
+    """None·NaN·문자열 등 비정상값을 안전하게 '—'로 처리하는 숫자 포맷터."""
+    try:
+        fv = float(v)
+        if fv != fv:
+            return "—"
+        return f"{fv:,.{dec}f}"
+    except (ValueError, TypeError):
+        return "—"
 
 
 # ============================================================ 분석
@@ -324,23 +339,35 @@ with tab_scan:
             prog.progress(i / len(tickers), text=f"스캔 중... {t}")
         prog.empty()
         df = pd.DataFrame(rows)
+        n = len(df)
+
+        def col(name):
+            c = df.get(name)
+            return list(c) if c is not None else [np.nan] * n
 
         def dist(level, spot):
-            if level != level or spot != spot or spot == 0:
+            try:
+                level, spot = float(level), float(spot)
+                if level != level or spot != spot or spot == 0:
+                    return ""
+                return f"{(level / spot - 1) * 100:+.1f}%"
+            except (ValueError, TypeError):
                 return ""
-            return f"{(level/spot-1)*100:+.1f}%"
 
-        show = pd.DataFrame({"티커": df.get("티커")})
-        show["현재가"] = df.get("현재가")
+        spots_raw = col("현재가")
+        show = pd.DataFrame({"티커": col("티커")})
+        show["현재가"] = [fnum(v, 2) for v in spots_raw]
         for tag in ("월", "주"):
-            show[f"{tag}·만기"] = df.get(f"{tag}_만기")
+            exp = col(f"{tag}_만기")
+            show[f"{tag}·만기"] = [("" if (e is None or (isinstance(e, float) and e != e))
+                                   else str(e)) for e in exp]
             for nm in ("MaxPain", "콜월", "풋월"):
-                col = f"{tag}_{nm}"
-                show[f"{tag}·{nm}"] = [
-                    (f"{lv:,.1f} ({dist(lv, sp)})" if lv == lv else "—")
-                    for lv, sp in zip(df.get(col, [np.nan] * len(df)),
-                                      df.get("현재가", [np.nan] * len(df)))
-                ]
+                lvls = col(f"{tag}_{nm}")
+                cells = []
+                for lv, sp in zip(lvls, spots_raw):
+                    f = fnum(lv, 1)
+                    cells.append("—" if f == "—" else f"{f} ({dist(lv, sp)})")
+                show[f"{tag}·{nm}"] = cells
         if "비고" in df:
             show["비고"] = df["비고"]
         show["현재가"] = show["현재가"].map(lambda v: f"{v:,.2f}" if v == v else "—")
